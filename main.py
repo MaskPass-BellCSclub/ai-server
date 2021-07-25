@@ -10,20 +10,23 @@ import cv2
 import urllib
 
 # Global Flags
-inFrame = None
-finishedFrame = None
-should_open_door = False
-stop_ai_server = False
-stop_camera_server = False
+inFrame = None  # Input Frame Global Var
+finishedFrame = None  # Output Frame Global Var
+should_open_door = False  # Boolean dictating if door should be opened. Returned by API /open_door
+stop_ai_server = False  # Flag to stop AI hotloop.
+stop_camera_server = False  # Flag to stop IPCamera hotloop
 
 # Get camera from mjpg stream
 def openIpCam(ip):
     global inFrame
     global stop_camera_server
+    # Hotloop so it always tries to open a camera (Incase the camera server is down for a period of time)
     while True:
         try:
+            # Open camera connection
             camera = cv2.VideoCapture(ip)
             while True:
+                # If the stop server flag is checked, break out of hot loop and reset flag
                 if stop_camera_server:
                     print("STOPPING CAMERA SERVER")
                     stop_camera_server = False
@@ -37,6 +40,7 @@ def openIpCam(ip):
                         camera.release()
                     else:
                         inFrame = frame
+                # Somethin went wrong ... Try to reconnect
                 else:
                     print("Failed To Open Ip Camera " + str(ip) + "!")
                     camera.release()
@@ -48,6 +52,7 @@ def openIpCam(ip):
 
 # Runs AI thread
 def categorize():
+    # Enable global flags
     global should_open_door
     global finishedFrame
     global inFrame
@@ -57,9 +62,11 @@ def categorize():
     # allow growth
     config.gpu_options.allow_growth = True
 
-    keras_model = load_model("./mask_model.h5")
+    # Model Information
+    run_model = load_model("./mask_model.h5") # load the model 
     classifier = cv2.CascadeClassifier(f"{cv2.haarcascades}/haarcascade_frontalface_alt2.xml")
 
+    # Label Flags for Detection
     label = {
         0: {"name": "Mask on chin", "color": (51, 153, 255), "id": 0},
         1: {"name": "Mask below nose", "color": (255, 255, 0), "id": 1},
@@ -67,9 +74,12 @@ def categorize():
         3: {"name": "Mask on", "color": (0, 102, 51), "id": 3},
     }
 
+    # Counter to see how many frames the mask on status was enabled
     maskOnBuffer = 0
 
+    # AI Hotloop
     while True:
+        # Check flag to stop AI hotloop. If so, exit out and reset flag
         if stop_ai_server:
             print("STOPPING AI SERVER")
             stop_ai_server = False
@@ -78,12 +88,15 @@ def categorize():
         if inFrame is None:
             continue
 
+        # Set the local variable frame to the global variable inFrame
         frame = inFrame
 
         # using openCV's built in facial recognition to identify where the faces are in the frame
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         detections = classifier.detectMultiScale(gray)
 
+        # Loop through all detections
+        # NOTE: For some reason this doest work. idk why...
         for x, y, w, h in detections:
             color = (0, 0, 0)
             gray_face = gray[y:y+h+50,x:x+w+50]
@@ -91,18 +104,21 @@ def categorize():
             # check the sizes of shape
             if gray_face.shape[0] >= 200 and gray_face.shape[1] >= 200:
 
-                # reshaping the images to pass through the model
+                # reshaping & processing the images to pass through the model
                 gray_face = cv2.resize(gray_face, (300, 300))
-                gray_face = gray_face / 255
+                gray_face = gray_face / 255 # this is to change the color value to a value between 0 and 1 as opposed to 1 - 255
                 gray_face = np.expand_dims(gray_face, axis=0)
                 gray_face = gray_face.reshape((1, 300, 300, 1))
-                pred = np.argmax(keras_model.predict(gray_face)) # make the prediction and return as 
+                pred = np.argmax(run_model.predict(gray_face)) # make the prediction and return as 
+
+                # retrieve meaning of the prediction
                 classification = label[pred]["name"]
                 color = label[pred]["color"]
 
                 # draw rectangles around facial images
                 cv2.rectangle(frame, (x, y), (x + w, y + h), color, label[pred]["id"])
 
+                # So how this works is that the "Mask on" flag has to be enabled for 20 AI Frames to set the should_open_door flag 
                 if classification == "Mask on":
                     # print("Mask On", maskOnBuffer)
                     maskOnBuffer += 1
@@ -116,6 +132,7 @@ def categorize():
                 
                 # The different annotations that can be drawn around the selection boxes
 
+                # Draw the text stuff
                 cv2.putText(
                     frame,
                     classification,
@@ -127,6 +144,7 @@ def categorize():
                     cv2.LINE_AA,
                 )
 
+                # Draw the big text on the top right depending in detection status
                 if classification == "No mask":
                     cv2.putText(
                         frame,
@@ -161,6 +179,7 @@ def categorize():
                         cv2.LINE_AA,
                     )
                 break
+        # For-else statement so that if no faces were detected, print that
         else:
             cv2.putText(
                 frame,
@@ -182,14 +201,18 @@ CORS(cameraAPI)
 
 cameraAPI.route("/", methods=["GET"], strict_slashes=False)
 
+# Home route, Just return 200 so that we know its running
 @cameraAPI.route("/", methods=["GET"])
 def index():
     return Response(status=200)
 
+# Returns live video feed of the finishedFrame var
 @cameraAPI.route("/video_feed", methods=["GET"])
 def video_feed():
     return Response(generate_next_camera_frame(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
+# Starts the AI
+# Takes in a camera value so that it know what camera stream to connect to.
 @cameraAPI.route("/start_ai", methods=["POST"])
 def start_ai():
     content = request.get_json(silent=True)
@@ -206,11 +229,13 @@ def start_ai():
 
     return Response(status=200)
 
+# API to check if the door should be opened. Called by CORE
 @cameraAPI.route("/open_door", methods=["GET"])
 def open_doors():
     global should_open_door
     return str(should_open_door)
 
+# Hack way to stop the server. Used during testing
 @cameraAPI.route("/stop", methods=["GET"])
 def stop():
     global stop_ai_server
@@ -219,10 +244,12 @@ def stop():
     stop_camera_server = True
     return Response(status=200)
 
+# Debug stuf
 @cameraAPI.route("/debug", methods=["GET"])
 def debug():
     return str(finishedFrame)
 
+# Python generator to generate the next camera frame.
 def generate_next_camera_frame():
     while True:
         time.sleep(0.05)
