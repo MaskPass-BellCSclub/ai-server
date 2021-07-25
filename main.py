@@ -80,6 +80,7 @@ def categorize():
 
         frame = inFrame
 
+        # using openCV's built in facial recognition to identify where the faces are in the frame
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         detections = classifier.detectMultiScale(gray)
 
@@ -87,17 +88,19 @@ def categorize():
             color = (0, 0, 0)
             gray_face = gray[y:y+h+50,x:x+w+50]
 
-            # Check location
+            # check the sizes of shape
             if gray_face.shape[0] >= 200 and gray_face.shape[1] >= 200:
 
+                # reshaping the images to pass through the model
                 gray_face = cv2.resize(gray_face, (300, 300))
                 gray_face = gray_face / 255
                 gray_face = np.expand_dims(gray_face, axis=0)
                 gray_face = gray_face.reshape((1, 300, 300, 1))
-                pred = np.argmax(keras_model.predict(gray_face))
+                pred = np.argmax(keras_model.predict(gray_face)) # make the prediction and return as 
                 classification = label[pred]["name"]
                 color = label[pred]["color"]
 
+                # draw rectangles around facial images
                 cv2.rectangle(frame, (x, y), (x + w, y + h), color, label[pred]["id"])
 
                 if classification == "Mask on":
@@ -109,6 +112,9 @@ def categorize():
                 else:
                     maskOnBuffer = 0
                     should_open_door = False
+
+                
+                # The different annotations that can be drawn around the selection boxes
 
                 cv2.putText(
                     frame,
